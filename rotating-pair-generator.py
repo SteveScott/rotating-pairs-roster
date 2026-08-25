@@ -29,6 +29,59 @@ ROSTER_FILE = Path(__file__).with_name('roster.txt')
 # Set this value to rotate pairings. Defaults to the current ISO week number.
 ROTATION_COUNTER = date.today().isocalendar()[1]
 
+
+def circle_pairs(players, round_index):
+	"""Return the regular circle-method pairs and any odd-roster bye."""
+	rotated = players[:]
+	for _ in range(round_index):
+		rotated = [rotated[0]] + [rotated[-1]] + rotated[1:-1]
+
+	pairs = []
+	bye_man = None
+	total = len(rotated)
+	for i in range(total // 2):
+		a = rotated[i]
+		b = rotated[total - 1 - i]
+		if a is None or b is None:
+			bye_man = b if a is None else a
+			continue
+		pairs.append((a, b))
+	return pairs, bye_man
+
+
+def odd_double_up_pairs(men, players):
+	"""Choose one extra pair per odd-roster round without adjacent repeats."""
+	cycle_len = len(players) - 1
+	regular_rounds = [circle_pairs(players, index) for index in range(cycle_len)]
+	candidates_by_round = []
+	for index, (pairs, bye_man) in enumerate(regular_rounds):
+		blocked_pairs = {
+			frozenset(pair)
+			for neighbor in ((index - 1) % cycle_len, index, (index + 1) % cycle_len)
+			for pair in regular_rounds[neighbor][0]
+		}
+		candidates_by_round.append([
+			(bye_man, man)
+			for man in men
+			if man != bye_man and frozenset((bye_man, man)) not in blocked_pairs
+		])
+
+	def choose(round_index, chosen):
+		if round_index == cycle_len:
+			return chosen if chosen[-1] != chosen[0] else None
+		for pair in candidates_by_round[round_index]:
+			if not chosen or pair != chosen[-1]:
+				result = choose(round_index + 1, chosen + [pair])
+				if result is not None:
+					return result
+		return None
+
+	chosen = choose(0, [])
+	if chosen is None:
+		raise RuntimeError('Unable to build non-repeating odd-roster pairings.')
+	return chosen
+
+
 def rotated_pairs(men, counter):
 	"""Return round-robin pairs for one rotation using the circle method.
 
@@ -43,8 +96,8 @@ def rotated_pairs(men, counter):
 	- Repeating this rotation visits every edge in the round-robin schedule.
 	- For even n players, cycle length is n - 1 rounds.
 	- For odd n players, add a dummy slot (None), then convert the would-be bye
-	  into an extra pair so nobody sits out. This creates one rotating double-up
-	  player each round.
+	  into an extra pair so nobody sits out. The extra partner is chosen to avoid
+	  a pair from either the current or previous rotation.
 
 	`counter` selects the round number modulo the cycle length.
 	"""
@@ -62,29 +115,11 @@ def rotated_pairs(men, counter):
 	cycle_len = total - 1
 	round_index = counter % cycle_len
 
-	rotated = players[:]
-	for _ in range(round_index):
-		# Circle rotation step: keep slot 0 fixed and rotate the remaining ring.
-		rotated = [rotated[0]] + [rotated[-1]] + rotated[1:-1]
-
-	pairs = []
-	bye_man = None
-	half = total // 2
-	for i in range(half):
-		a = rotated[i]
-		b = rotated[total - 1 - i]
-		# For odd rosters, track the would-be bye so we can give him a real pair.
-		if a is None or b is None:
-			bye_man = b if a is None else a
-			continue
-		pairs.append((a, b))
+	pairs, bye_man = circle_pairs(players, round_index)
 
 	if is_odd and bye_man is not None:
-		# Choose the next roster member after the bye; as bye rotates each round,
-		# the double-up role also rotates through everyone.
-		bye_idx = men_list.index(bye_man)
-		double_up = men_list[(bye_idx + 1) % len(men_list)]
-		pairs.append((bye_man, double_up))
+		double_up_pair = odd_double_up_pairs(men_list, players)[round_index]
+		pairs.append(tuple(double_up_pair))
 
 	return pairs
 
