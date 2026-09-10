@@ -1,3 +1,27 @@
+"""Generate the weekly pairings for a roster of men.
+
+Pairs come from the circle method for round-robin scheduling, so over one cycle
+every man is paired with every other man. An odd roster gets no bye: the man who
+would otherwise sit out is paired a second time that week, because a group of
+one is not a pair. One man is therefore in two pairs each week.
+
+The schedule runs for n cycles before repeating, starting the roster at a
+different position each cycle. That is what keeps it fair; README.md explains
+why a single cycle cannot be. Every week, without exception and including
+across the boundary between cycles:
+
+- no man doubles up two weeks running,
+- no two men are paired two weeks running.
+
+And over a full run of n cycles:
+
+- every man doubles up exactly n times,
+- no two men are singled out for the extra pairings.
+
+The roster itself lives in roster.txt, which is confidential and gitignored.
+Real names must not appear in this file, or anywhere else in this repository.
+"""
+
 import sys
 from datetime import date
 from functools import lru_cache
@@ -27,7 +51,8 @@ def load_roster(file_path):
 
 ROSTER_FILE = Path(__file__).with_name('roster.txt')
 
-# Set this value to rotate pairings. Defaults to the current ISO week number.
+# Which week of the schedule to print, counting from week 0. Defaults to the
+# current ISO week number.
 ROTATION_COUNTER = date.today().isocalendar()[1]
 
 
@@ -230,12 +255,12 @@ def rotated_pairs(men, counter):
 	- Each round creates non-overlapping pairs for that round.
 	- Repeating this rotation visits every edge in the round-robin schedule.
 	- For an even roster of n men, the cycle is n - 1 weeks long and every man
-	has exactly one partner each week.
+	  has exactly one partner each week.
 	- For an odd roster, a dummy slot stands in for the missing man, and the
-	would-be bye becomes an extra pair so that nobody sits out. One man is
-	therefore in two pairs each week. The cycle is n weeks long, and the
-	schedule repeats every n cycles rather than every cycle, so that the
-	double-ups and the extra pairings do not keep falling to the same men.
+	  would-be bye becomes an extra pair so that nobody sits out. One man is
+	  therefore in two pairs each week. The cycle is n weeks long, and the
+	  schedule repeats every n cycles rather than every cycle, so that the
+	  double-ups and the extra pairings do not keep falling to the same men.
 	"""
 	if len(men) < 2:
 		return []
