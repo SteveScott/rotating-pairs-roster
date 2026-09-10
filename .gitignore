@@ -1,2 +1,6 @@
 # Local roster data file
 roster.txt
+
+# Python bytecode caches
+__pycache__/
+*.py[cod]
