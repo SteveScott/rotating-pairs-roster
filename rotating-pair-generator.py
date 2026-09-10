@@ -49,37 +49,127 @@ def circle_pairs(players, round_index):
 	return pairs, bye_man
 
 
+def _min_cost_assignment(cost):
+	"""Give each row a distinct column at the lowest total cost.
+
+	`cost` must be square. Returns a list mapping each row index to the column
+	index assigned to it, so the result is always a permutation. This is the
+	Hungarian algorithm with potentials, which runs in cubic time.
+	"""
+	size = len(cost)
+	unreached = float('inf')
+	row_potential = [0] * (size + 1)
+	col_potential = [0] * (size + 1)
+	col_owner = [0] * (size + 1)
+	came_from = [0] * (size + 1)
+
+	for row in range(1, size + 1):
+		col_owner[0] = row
+		col = 0
+		cheapest = [unreached] * (size + 1)
+		used = [False] * (size + 1)
+
+		while True:
+			used[col] = True
+			owner = col_owner[col]
+			delta = unreached
+			next_col = -1
+
+			for candidate in range(1, size + 1):
+				if used[candidate]:
+					continue
+				reduced = (
+					cost[owner - 1][candidate - 1]
+					- row_potential[owner]
+					- col_potential[candidate]
+				)
+				if reduced < cheapest[candidate]:
+					cheapest[candidate] = reduced
+					came_from[candidate] = col
+				if cheapest[candidate] < delta:
+					delta = cheapest[candidate]
+					next_col = candidate
+
+			for candidate in range(size + 1):
+				if used[candidate]:
+					row_potential[col_owner[candidate]] += delta
+					col_potential[candidate] -= delta
+				else:
+					cheapest[candidate] -= delta
+
+			col = next_col
+			if col_owner[col] == 0:
+				break
+
+		while col:
+			previous = came_from[col]
+			col_owner[col] = col_owner[previous]
+			col = previous
+
+	assignment = [0] * size
+	for col in range(1, size + 1):
+		if col_owner[col]:
+			assignment[col_owner[col] - 1] = col - 1
+	return assignment
+
+
 def odd_double_up_pairs(men, players):
-	"""Choose one extra pair per odd-roster round without adjacent repeats."""
+	"""Pick each round's extra pair so that double-ups rotate evenly.
+
+	The circle method leaves exactly one man out of the regular pairs each
+	round: the man drawn against the dummy slot. He is paired a second time
+	with a man who already has a partner that round, so nobody sits out. That
+	extra partner is the man who ends up in two pairs for the week.
+
+	Who doubles up is a fairness question, so it is settled for the whole cycle
+	at once instead of one round at a time. The extra partners are chosen as a
+	permutation of the roster, which gives every man exactly one double-up per
+	cycle. Choosing round by round instead lets the search settle on whoever
+	sits earliest in the roster, which made the first-listed man double up in
+	most weeks of the cycle.
+
+	Repeating a pairing from a neighbouring week is penalised but cannot always
+	be avoided. In every round the man paired with the next round's leftover
+	man is the same one, so he is blocked in all but one round, and demanding
+	both an even rotation and no neighbouring repeat is infeasible. The even
+	rotation is the guarantee; neighbouring repeats are merely minimised, which
+	works out to one per cycle.
+	"""
 	cycle_len = len(players) - 1
 	regular_rounds = [circle_pairs(players, index) for index in range(cycle_len)]
-	candidates_by_round = []
-	for index, (pairs, bye_man) in enumerate(regular_rounds):
-		blocked_pairs = {
-			frozenset(pair)
-			for neighbor in ((index - 1) % cycle_len, index, (index + 1) % cycle_len)
-			for pair in regular_rounds[neighbor][0]
-		}
-		candidates_by_round.append([
-			(bye_man, man)
-			for man in men
-			if man != bye_man and frozenset((bye_man, man)) not in blocked_pairs
-		])
+	regular_pairs = [
+		{frozenset(pair) for pair in pairs} for pairs, _ in regular_rounds
+	]
 
-	def choose(round_index, chosen):
-		if round_index == cycle_len:
-			return chosen if chosen[-1] != chosen[0] else None
-		for pair in candidates_by_round[round_index]:
-			if not chosen or pair != chosen[-1]:
-				result = choose(round_index + 1, chosen + [pair])
-				if result is not None:
-					return result
-		return None
+	# No man may partner himself, so that choice is priced beyond any total the
+	# neighbouring-repeat penalties can reach.
+	forbidden = 100 * cycle_len
+	cost = []
+	for index, (_, bye_man) in enumerate(regular_rounds):
+		neighbours = ((index - 1) % cycle_len, (index + 1) % cycle_len)
+		next_bye_man = regular_rounds[(index + 1) % cycle_len][1]
+		row = []
+		for man in men:
+			if man == bye_man:
+				row.append(forbidden)
+				continue
+			pair = frozenset((bye_man, man))
+			penalty = sum(1 for other in neighbours if pair in regular_pairs[other])
+			# Handing this round's leftover man to the next round's leftover man is
+			# the one way two consecutive rounds can share the same extra pair.
+			if man == next_bye_man:
+				penalty += 1
+			row.append(penalty)
+		cost.append(row)
 
-	chosen = choose(0, [])
-	if chosen is None:
-		raise RuntimeError('Unable to build non-repeating odd-roster pairings.')
-	return chosen
+	assignment = _min_cost_assignment(cost)
+	if any(cost[index][assignment[index]] >= forbidden for index in range(cycle_len)):
+		raise RuntimeError('Unable to build odd-roster pairings without a self-pair.')
+
+	return [
+		(regular_rounds[index][1], men[assignment[index]])
+		for index in range(cycle_len)
+	]
 
 
 def rotated_pairs(men, counter):

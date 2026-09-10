@@ -63,19 +63,36 @@ same week. So for an odd roster of `n` men:
 For a 9-man roster that means 5 pairs per week, with one man appearing twice.
 A name showing up twice in the output is the intended behaviour, not a bug.
 
-The second partner is chosen so that it does not repeat a pairing from the
-previous, current, or next rotation, which keeps consecutive weeks from
-producing the same two men together.
+### The double-up rotates evenly
 
-### Known characteristic: doubling is not evenly spread
+Over a full cycle **every man takes the second pair exactly once** — on a
+9-man roster, one double-up each across the 9 weeks. That is a guarantee
+rather than a tendency, because the extra partners are chosen for the whole
+cycle at once as a permutation of the roster, not picked a week at a time.
+Picking week by week is what an earlier version did, and it kept settling on
+whoever was listed first in `roster.txt`, who then doubled up in 6 weeks out
+of 9 while most men never doubled at all.
 
-Because the circle method holds slot 0 fixed, the man in the first roster
-position draws the double-up far more often than the rest. Over a full
-9-week cycle on a 9-man roster, the first-listed man is doubled 6 times
-while most men are never doubled at all. Reordering `roster.txt` changes who
-absorbs it but not the skew itself. If even distribution matters, the
-double-up selection needs to account for how often each man has already been
-doubled.
+Reordering `roster.txt` changes *which* week a given man doubles up. It does
+not change the even share.
+
+### Why one pairing repeats per cycle
+
+Ideally a double-up pair would also never repeat a pairing from the week
+before or after, so the same two men are never together in consecutive weeks.
+On an odd roster that cannot be combined with an even rotation.
+
+The reason is structural. In every round, the man paired with the *next*
+round's leftover man is the same man throughout the cycle, so he is ruled out
+as an extra partner in every round but one. Two men end up competing for that
+single round, and by Hall's theorem no assignment can give every man a turn.
+Something has to give, and an even rotation is the point of the exercise, so
+it is the constraint that holds.
+
+Repeats are therefore minimised rather than forbidden, and the minimum works
+out to exactly **one repeated pairing per cycle** at every roster size. The
+generator finds that minimum exactly, by solving the choice of extra partners
+as a min-cost assignment problem rather than by searching greedily.
 
 ## Tests
 
