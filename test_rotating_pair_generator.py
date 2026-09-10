@@ -83,9 +83,16 @@ class RotatedPairsTests(unittest.TestCase):
 
     def test_odd_cycle_modulo_behavior(self):
         men = ["A", "B", "C", "D", "E"]
-        # For odd n, cycle length is n (because of one double-up per round).
+        # For odd n the round robin takes n weeks, but the schedule does not
+        # repeat until n cycles have run: each cycle starts the roster at a
+        # different position so the double-ups and the extra pairings move on
+        # to other men instead of falling to the same ones every cycle.
+        self.assertNotEqual(
+            pair_generator.rotated_pairs(men, len(men)),
+            pair_generator.rotated_pairs(men, 0),
+        )
         self.assertEqual(
-            pair_generator.rotated_pairs(men, 5),
+            pair_generator.rotated_pairs(men, len(men) ** 2),
             pair_generator.rotated_pairs(men, 0),
         )
 
@@ -150,23 +157,17 @@ class RotatedPairsTests(unittest.TestCase):
 
             self.assertIn("Roster file not found", str(ctx.exception))
 
-    def test_odd_roster_barely_repeats_pairs_in_adjacent_weeks(self):
-        # An even double-up rotation and a blanket ban on repeating a
-        # neighbouring week's pair cannot both hold on an odd roster; see
-        # OddRosterDoubleUpTests for why. The even rotation is the guarantee,
-        # so one repeat per cycle is tolerated and more than that is a bug.
+    def test_odd_roster_has_no_repeated_pair_in_adjacent_weeks(self):
+        # Holds for the whole run, cycle boundaries included.
         men = [f"Person {number}" for number in range(1, 10)]
         weeks = [
             {frozenset(pair) for pair in pair_generator.rotated_pairs(men, week)}
-            for week in range(len(men))
+            for week in range(len(men) ** 2)
         ]
 
-        repeats = 0
         for week, pairs in enumerate(weeks):
             self.assertEqual(len(pairs), len(pair_generator.rotated_pairs(men, week)))
-            repeats += len(pairs & weeks[week - 1])
-
-        self.assertLessEqual(repeats, 1)
+            self.assertFalse(pairs & weeks[week - 1])
 
     def test_even_roster_has_no_repeated_pair_in_adjacent_weeks(self):
         men = ['A', 'B', 'C', 'D', 'E', 'F']
@@ -182,10 +183,15 @@ class RotatedPairsTests(unittest.TestCase):
 class OddRosterDoubleUpTests(unittest.TestCase):
     """Pin down the odd-roster rule: nobody sits out, so one man doubles up.
 
-    A pair needs two men, so an odd roster cannot leave one man over — a group
+    A pair needs two men, so an odd roster cannot leave one man over -- a group
     of one is not a pair. Rather than giving that man a bye, the generator pairs
     him a second time with another man from the same week. A name appearing
     twice in a week's output is therefore intended behaviour, not a bug.
+
+    Sharing the double-ups perfectly evenly inside a single cycle is
+    impossible, so the schedule runs a different arrangement of the roster each
+    cycle and evens out over a full run of n cycles. These tests check the
+    guarantees that hold every week and the fairness that holds over the run.
 
     Real roster names are confidential and must never appear in this repository,
     so these tests use placeholder names.
@@ -193,48 +199,45 @@ class OddRosterDoubleUpTests(unittest.TestCase):
 
     ODD_ROSTER = [f"Person {number}" for number in range(1, 10)]
 
+    @staticmethod
+    def _doubled_man(pairs):
+        counts = {}
+        for first, second in pairs:
+            counts[first] = counts.get(first, 0) + 1
+            counts[second] = counts.get(second, 0) + 1
+        doubled = [man for man, count in counts.items() if count == 2]
+        return doubled[0] if len(doubled) == 1 else None
+
     def test_odd_roster_produces_one_pair_more_than_halving_the_roster(self):
         # 9 men => 5 pairs, not 4 pairs plus a leftover man.
-        for counter in range(len(self.ODD_ROSTER)):
+        for counter in range(len(self.ODD_ROSTER) ** 2):
             pairs = pair_generator.rotated_pairs(self.ODD_ROSTER, counter)
             self.assertEqual(len(pairs), (len(self.ODD_ROSTER) + 1) // 2)
 
     def test_odd_roster_never_emits_a_lone_man_or_dummy_slot(self):
         # The dummy slot used for the pairing math must never reach the output.
-        for counter in range(len(self.ODD_ROSTER)):
+        for counter in range(len(self.ODD_ROSTER) ** 2):
             for pair in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
                 self.assertEqual(len(pair), 2)
                 self.assertNotIn(None, pair)
                 self.assertNotEqual(pair[0], pair[1])
 
     def test_odd_roster_every_man_is_paired_every_week(self):
-        for counter in range(len(self.ODD_ROSTER)):
+        for counter in range(len(self.ODD_ROSTER) ** 2):
             paired = set()
             for a, b in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
                 paired.update((a, b))
             self.assertEqual(paired, set(self.ODD_ROSTER))
 
     def test_odd_roster_doubles_up_exactly_one_man_each_week(self):
-        for counter in range(len(self.ODD_ROSTER)):
-            counts = {man: 0 for man in self.ODD_ROSTER}
-            for a, b in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
-                counts[a] += 1
-                counts[b] += 1
-
-            doubled = [man for man, count in counts.items() if count == 2]
-            self.assertEqual(len(doubled), 1)
-            # Everyone else is in exactly one pair.
-            self.assertTrue(all(count in (1, 2) for count in counts.values()))
+        for counter in range(len(self.ODD_ROSTER) ** 2):
+            pairs = pair_generator.rotated_pairs(self.ODD_ROSTER, counter)
+            self.assertIsNotNone(self._doubled_man(pairs))
 
     def test_odd_roster_doubled_man_gets_two_different_partners(self):
-        for counter in range(len(self.ODD_ROSTER)):
+        for counter in range(len(self.ODD_ROSTER) ** 2):
             pairs = pair_generator.rotated_pairs(self.ODD_ROSTER, counter)
-            counts = {man: 0 for man in self.ODD_ROSTER}
-            for a, b in pairs:
-                counts[a] += 1
-                counts[b] += 1
-
-            doubled = next(man for man, count in counts.items() if count == 2)
+            doubled = self._doubled_man(pairs)
             partners = [
                 other
                 for pair in pairs
@@ -245,26 +248,55 @@ class OddRosterDoubleUpTests(unittest.TestCase):
             self.assertEqual(len(partners), 2)
             self.assertEqual(len(set(partners)), 2)
 
-    def test_every_man_doubles_up_exactly_once_per_cycle(self):
-        # The point of the rotation: over a full cycle the double-up duty is
-        # shared equally, not concentrated on any one man.
-        for roster_size in (5, 7, 9, 11, 13):
+    def test_no_man_doubles_up_in_consecutive_weeks(self):
+        # Doubling up two weeks running is the thing to avoid, so it is a hard
+        # guarantee: it holds inside a cycle and across a cycle boundary.
+        for roster_size in (5, 7, 9, 11):
+            men = [f"Person {number}" for number in range(1, roster_size + 1)]
+            previous = None
+            for counter in range(roster_size ** 2 + 1):
+                doubled = self._doubled_man(pair_generator.rotated_pairs(men, counter))
+                self.assertNotEqual(
+                    doubled,
+                    previous,
+                    f"roster of {roster_size}: {doubled} doubles up in weeks "
+                    f"{counter - 1} and {counter}",
+                )
+                previous = doubled
+
+    def test_no_two_men_are_paired_in_consecutive_weeks(self):
+        # Likewise for a pairing: the same two men are never put together two
+        # weeks running, cycle boundaries included.
+        for roster_size in (5, 7, 9, 11):
+            men = [f"Person {number}" for number in range(1, roster_size + 1)]
+            previous = set()
+            for counter in range(roster_size ** 2 + 1):
+                pairs = {
+                    frozenset(pair)
+                    for pair in pair_generator.rotated_pairs(men, counter)
+                }
+                self.assertFalse(
+                    pairs & previous,
+                    f"roster of {roster_size}: week {counter} repeats a pairing "
+                    f"from week {counter - 1}",
+                )
+                previous = pairs
+
+    def test_every_man_doubles_up_equally_often_over_a_full_run(self):
+        # The point of the rotation: double-up duty is shared equally rather
+        # than concentrated on any one man. It cannot come out even within a
+        # single cycle, so the guarantee is over the full run of n cycles.
+        for roster_size in (5, 7, 9, 11):
             men = [f"Person {number}" for number in range(1, roster_size + 1)]
             doubled_counts = {man: 0 for man in men}
 
-            for counter in range(roster_size):
-                counts = {man: 0 for man in men}
-                for a, b in pair_generator.rotated_pairs(men, counter):
-                    counts[a] += 1
-                    counts[b] += 1
-
-                doubled = [man for man, count in counts.items() if count == 2]
-                self.assertEqual(len(doubled), 1)
-                doubled_counts[doubled[0]] += 1
+            for counter in range(roster_size ** 2):
+                pairs = pair_generator.rotated_pairs(men, counter)
+                doubled_counts[self._doubled_man(pairs)] += 1
 
             self.assertEqual(
                 set(doubled_counts.values()),
-                {1},
+                {roster_size},
                 f"roster of {roster_size} shares double-ups unevenly: {doubled_counts}",
             )
 
@@ -274,37 +306,71 @@ class OddRosterDoubleUpTests(unittest.TestCase):
         # most weeks of the cycle.
         men = [f"Person {number}" for number in range(1, 10)]
         first_man = men[0]
-        weeks_doubled = 0
+        weeks_doubled = sum(
+            1
+            for counter in range(len(men) ** 2)
+            if self._doubled_man(pair_generator.rotated_pairs(men, counter)) == first_man
+        )
 
-        for counter in range(len(men)):
-            counts = {man: 0 for man in men}
-            for a, b in pair_generator.rotated_pairs(men, counter):
-                counts[a] += 1
-                counts[b] += 1
+        self.assertEqual(weeks_doubled, len(men))
 
-            if counts[first_man] == 2:
-                weeks_doubled += 1
+    def test_extra_pairing_does_not_single_out_the_same_men_every_cycle(self):
+        # A pair that gets the extra pairing is together twice in that cycle.
+        # Repeating one cycle forever would favour those men permanently, so
+        # the extra pairings have to move on to other men as cycles go by.
+        men = [f"Person {number}" for number in range(1, 10)]
+        size = len(men)
+        extras_by_cycle = []
 
-        self.assertEqual(weeks_doubled, 1)
+        for cycle in range(size):
+            extras = set()
+            for week in range(size):
+                pairs = pair_generator.rotated_pairs(men, cycle * size + week)
+                doubled = self._doubled_man(pairs)
+                seen = set()
+                for pair in pairs:
+                    if doubled in pair:
+                        seen.add(frozenset(pair))
+                extras |= seen
+            extras_by_cycle.append(extras)
+
+        # No cycle hands the extra pairings to exactly the same men as another.
+        for cycle, extras in enumerate(extras_by_cycle):
+            for other in range(cycle + 1, size):
+                self.assertNotEqual(extras, extras_by_cycle[other])
+
+        # And no single pair collects the extra pairing in every cycle.
+        for pair in set().union(*extras_by_cycle):
+            cycles_with_pair = sum(1 for e in extras_by_cycle if pair in e)
+            self.assertLess(cycles_with_pair, size)
+
+    def test_no_two_men_are_paired_far_more_often_than_any_other_two(self):
+        # Over a full run every pair should come up a similar number of times.
+        men = [f"Person {number}" for number in range(1, 10)]
+        size = len(men)
+        togetherness = {}
+
+        for counter in range(size ** 2):
+            for pair in pair_generator.rotated_pairs(men, counter):
+                key = frozenset(pair)
+                togetherness[key] = togetherness.get(key, 0) + 1
+
+        # Every possible pair comes up, and the busiest pair is not a large
+        # multiple of the quietest.
+        self.assertEqual(len(togetherness), size * (size - 1) // 2)
+        self.assertLessEqual(max(togetherness.values()), min(togetherness.values()) * 2)
 
     def test_double_up_rotation_does_not_depend_on_roster_order(self):
         # Reordering the roster reorders who doubles up when, but every man
-        # still takes the duty exactly once.
-        men = [f"Person {number}" for number in range(1, 10)]
-        reversed_men = list(reversed(men))
-        doubled_counts = {man: 0 for man in reversed_men}
+        # still takes the duty equally often over a full run.
+        men = list(reversed([f"Person {number}" for number in range(1, 10)]))
+        doubled_counts = {man: 0 for man in men}
 
-        for counter in range(len(reversed_men)):
-            counts = {man: 0 for man in reversed_men}
-            for a, b in pair_generator.rotated_pairs(reversed_men, counter):
-                counts[a] += 1
-                counts[b] += 1
+        for counter in range(len(men) ** 2):
+            pairs = pair_generator.rotated_pairs(men, counter)
+            doubled_counts[self._doubled_man(pairs)] += 1
 
-            doubled = [man for man, count in counts.items() if count == 2]
-            self.assertEqual(len(doubled), 1)
-            doubled_counts[doubled[0]] += 1
-
-        self.assertEqual(set(doubled_counts.values()), {1})
+        self.assertEqual(set(doubled_counts.values()), {len(men)})
 
     def test_even_roster_never_doubles_anyone_up(self):
         # The double-up is strictly an odd-roster mechanism.

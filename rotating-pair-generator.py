@@ -1,5 +1,6 @@
 import sys
 from datetime import date
+from functools import lru_cache
 from pathlib import Path
 
 
@@ -49,131 +50,175 @@ def circle_pairs(players, round_index):
 	return pairs, bye_man
 
 
-def _min_cost_assignment(cost):
-	"""Give each row a distinct column at the lowest total cost.
+def _doubled_man(pairs):
+	"""Return the man who appears in two of one round's pairs, if any."""
+	counts = {}
+	for first, second in pairs:
+		counts[first] = counts.get(first, 0) + 1
+		counts[second] = counts.get(second, 0) + 1
+	for man, count in counts.items():
+		if count == 2:
+			return man
+	return None
 
-	`cost` must be square. Returns a list mapping each row index to the column
-	index assigned to it, so the result is always a permutation. This is the
-	Hungarian algorithm with potentials, which runs in cubic time.
+
+def _extra_partners(arrangement, max_double_ups):
+	"""Choose every round's extra partner for one cycle of an odd roster.
+
+	The circle method leaves one man out of the regular pairs each round: the
+	man drawn against the dummy slot. He is paired a second time with a man who
+	already has a partner that round, so nobody sits out, and that extra partner
+	is the man who ends up in two pairs.
+
+	These constraints are all hard, and the search reports failure rather than
+	bending them:
+
+	- no man is his own partner,
+	- an extra pair never repeats a pairing from the round before or after,
+	- two rounds running never share the same extra pair,
+	- the same man never doubles up two rounds running,
+	- no man doubles up more than `max_double_ups` times in the cycle.
+
+	Candidates are tried least-used first, so the double-ups land as evenly as
+	the constraints allow. Returns one extra partner per round, or None when no
+	assignment satisfies the constraints.
 	"""
-	size = len(cost)
-	unreached = float('inf')
-	row_potential = [0] * (size + 1)
-	col_potential = [0] * (size + 1)
-	col_owner = [0] * (size + 1)
-	came_from = [0] * (size + 1)
+	size = len(arrangement)
+	players = list(arrangement) + [None]
+	rounds = [circle_pairs(players, index) for index in range(size)]
+	leftovers = [leftover for _, leftover in rounds]
+	round_pairs = [{frozenset(pair) for pair in pairs} for pairs, _ in rounds]
+	position = {man: index for index, man in enumerate(arrangement)}
 
-	for row in range(1, size + 1):
-		col_owner[0] = row
-		col = 0
-		cheapest = [unreached] * (size + 1)
-		used = [False] * (size + 1)
+	candidates = []
+	for index in range(size):
+		leftover = leftovers[index]
+		candidates.append([
+			man
+			for man in arrangement
+			if man != leftover
+			and frozenset((leftover, man)) not in round_pairs[(index - 1) % size]
+			and frozenset((leftover, man)) not in round_pairs[(index + 1) % size]
+		])
 
-		while True:
-			used[col] = True
-			owner = col_owner[col]
-			delta = unreached
-			next_col = -1
+	used = {man: 0 for man in arrangement}
+	chosen = [None] * size
 
-			for candidate in range(1, size + 1):
-				if used[candidate]:
-					continue
-				reduced = (
-					cost[owner - 1][candidate - 1]
-					- row_potential[owner]
-					- col_potential[candidate]
-				)
-				if reduced < cheapest[candidate]:
-					cheapest[candidate] = reduced
-					came_from[candidate] = col
-				if cheapest[candidate] < delta:
-					delta = cheapest[candidate]
-					next_col = candidate
+	def extend(index):
+		if index == size:
+			return True
 
-			for candidate in range(size + 1):
-				if used[candidate]:
-					row_potential[col_owner[candidate]] += delta
-					col_potential[candidate] -= delta
-				else:
-					cheapest[candidate] -= delta
-
-			col = next_col
-			if col_owner[col] == 0:
-				break
-
-		while col:
-			previous = came_from[col]
-			col_owner[col] = col_owner[previous]
-			col = previous
-
-	assignment = [0] * size
-	for col in range(1, size + 1):
-		if col_owner[col]:
-			assignment[col_owner[col] - 1] = col - 1
-	return assignment
-
-
-def odd_double_up_pairs(men, players):
-	"""Pick each round's extra pair so that double-ups rotate evenly.
-
-	The circle method leaves exactly one man out of the regular pairs each
-	round: the man drawn against the dummy slot. He is paired a second time
-	with a man who already has a partner that round, so nobody sits out. That
-	extra partner is the man who ends up in two pairs for the week.
-
-	Who doubles up is a fairness question, so it is settled for the whole cycle
-	at once instead of one round at a time. The extra partners are chosen as a
-	permutation of the roster, which gives every man exactly one double-up per
-	cycle. Choosing round by round instead lets the search settle on whoever
-	sits earliest in the roster, which made the first-listed man double up in
-	most weeks of the cycle.
-
-	Repeating a pairing from a neighbouring week is penalised but cannot always
-	be avoided. In every round the man paired with the next round's leftover
-	man is the same one, so he is blocked in all but one round, and demanding
-	both an even rotation and no neighbouring repeat is infeasible. The even
-	rotation is the guarantee; neighbouring repeats are merely minimised, which
-	works out to one per cycle.
-	"""
-	cycle_len = len(players) - 1
-	regular_rounds = [circle_pairs(players, index) for index in range(cycle_len)]
-	regular_pairs = [
-		{frozenset(pair) for pair in pairs} for pairs, _ in regular_rounds
-	]
-
-	# No man may partner himself, so that choice is priced beyond any total the
-	# neighbouring-repeat penalties can reach.
-	forbidden = 100 * cycle_len
-	cost = []
-	for index, (_, bye_man) in enumerate(regular_rounds):
-		neighbours = ((index - 1) % cycle_len, (index + 1) % cycle_len)
-		next_bye_man = regular_rounds[(index + 1) % cycle_len][1]
-		row = []
-		for man in men:
-			if man == bye_man:
-				row.append(forbidden)
+		order = sorted(candidates[index], key=lambda man: (used[man], position[man]))
+		for man in order:
+			if used[man] >= max_double_ups:
 				continue
-			pair = frozenset((bye_man, man))
-			penalty = sum(1 for other in neighbours if pair in regular_pairs[other])
-			# Handing this round's leftover man to the next round's leftover man is
-			# the one way two consecutive rounds can share the same extra pair.
-			if man == next_bye_man:
-				penalty += 1
-			row.append(penalty)
-		cost.append(row)
+			if index:
+				previous = chosen[index - 1]
+				if man == previous:
+					continue
+				if frozenset((leftovers[index], man)) == frozenset(
+					(leftovers[index - 1], previous)
+				):
+					continue
 
-	assignment = _min_cost_assignment(cost)
-	if any(cost[index][assignment[index]] >= forbidden for index in range(cycle_len)):
-		raise RuntimeError('Unable to build odd-roster pairings without a self-pair.')
+			used[man] += 1
+			chosen[index] = man
+			if extend(index + 1):
+				return True
+			used[man] -= 1
+			chosen[index] = None
+		return False
 
-	return [
-		(regular_rounds[index][1], men[assignment[index]])
-		for index in range(cycle_len)
-	]
+	return list(chosen) if extend(0) else None
+
+
+def _cycle_rounds(arrangement):
+	"""Return the pairs for each round of one cycle of an odd roster.
+
+	Sharing the double-ups perfectly evenly within a single cycle is
+	impossible. In every round the man paired with the next round's leftover
+	man is the same one, so he can serve as an extra partner in only one round
+	of the cycle; two men then compete for that round, and by Hall's theorem no
+	assignment gives each man exactly one turn. The search therefore starts by
+	allowing two double-ups per man, and only loosens that if it has to. The
+	remaining unevenness is evened out across cycles by `_odd_schedule`.
+	"""
+	size = len(arrangement)
+	players = list(arrangement) + [None]
+	rounds = [circle_pairs(players, index) for index in range(size)]
+
+	for max_double_ups in range(2, size + 1):
+		partners = _extra_partners(arrangement, max_double_ups)
+		if partners is not None:
+			return [
+				pairs + [(leftover, partners[index])]
+				for index, (pairs, leftover) in enumerate(rounds)
+			]
+
+	raise RuntimeError('Unable to schedule the odd-roster double-ups.')
+
+
+def _seam_safe_order(cycles):
+	"""Order the cycles so no cycle boundary repeats a pair or a doubled man.
+
+	Each cycle appears exactly once in the order, so over a full run every man
+	takes every position in the rotation. The constraints that hold inside a
+	cycle have to hold across its boundary too, which rules out some orderings;
+	the rest is a Hamiltonian cycle over the compatible ones.
+	"""
+	size = len(cycles)
+	compatible = [[False] * size for _ in range(size)]
+	for first in range(size):
+		closing = cycles[first][-1]
+		closing_pairs = {frozenset(pair) for pair in closing}
+		for second in range(size):
+			opening = cycles[second][0]
+			if closing_pairs & {frozenset(pair) for pair in opening}:
+				continue
+			compatible[first][second] = _doubled_man(closing) != _doubled_man(opening)
+
+	order = []
+	visited = set()
+
+	def extend(offset):
+		order.append(offset)
+		visited.add(offset)
+
+		if len(order) == size:
+			if compatible[offset][order[0]]:
+				return True
+		else:
+			for candidate in range(size):
+				if candidate not in visited and compatible[offset][candidate]:
+					if extend(candidate):
+						return True
+
+		order.pop()
+		visited.discard(offset)
+		return False
+
+	if not extend(0):
+		raise RuntimeError('Unable to order the cycles without a repeat at a boundary.')
+	return order
+
+
+@lru_cache(maxsize=None)
+def _odd_schedule(men):
+	"""Return every cycle of an odd roster's schedule, in the order they run.
+
+	One cycle covers the round robin, but running the same cycle over and over
+	would hand the same men the extra pairing every time. Each cycle therefore
+	starts the roster at a different position, which moves the double-ups and
+	the extra pairings on to different men. Over a full run of `n` cycles every
+	man doubles up equally often.
+	"""
+	size = len(men)
+	cycles = [_cycle_rounds(men[offset:] + men[:offset]) for offset in range(size)]
+	return tuple(cycles[offset] for offset in _seam_safe_order(cycles))
 
 
 def rotated_pairs(men, counter):
-	"""Return round-robin pairs for one rotation using the circle method.
+	"""Return the pairs for one week using the circle method.
 
 	How the circle method works:
 	1) Arrange players in a fixed list of slots.
@@ -184,44 +229,42 @@ def rotated_pairs(men, counter):
 	Why this works:
 	- Each round creates non-overlapping pairs for that round.
 	- Repeating this rotation visits every edge in the round-robin schedule.
-	- For even n players, cycle length is n - 1 rounds.
-	- For odd n players, add a dummy slot (None), then convert the would-be bye
-	  into an extra pair so nobody sits out. The extra partner is chosen to avoid
-	  a pair from either the current or previous rotation.
-
-	`counter` selects the round number modulo the cycle length.
+	- For an even roster of n men, the cycle is n - 1 weeks long and every man
+	has exactly one partner each week.
+	- For an odd roster, a dummy slot stands in for the missing man, and the
+	would-be bye becomes an extra pair so that nobody sits out. One man is
+	therefore in two pairs each week. The cycle is n weeks long, and the
+	schedule repeats every n cycles rather than every cycle, so that the
+	double-ups and the extra pairings do not keep falling to the same men.
 	"""
 	if len(men) < 2:
 		return []
 
 	men_list = list(men)
-	players = men_list[:]
-	# For odd roster sizes, add a dummy player so pairing math stays symmetric.
-	is_odd = len(players) % 2 == 1
-	if is_odd:
-		players.append(None)
+	size = len(men_list)
 
-	total = len(players)
-	cycle_len = total - 1
-	round_index = counter % cycle_len
+	if size % 2 == 0:
+		pairs, _ = circle_pairs(men_list, counter % (size - 1))
+		return pairs
 
-	pairs, bye_man = circle_pairs(players, round_index)
-
-	if is_odd and bye_man is not None:
-		double_up_pair = odd_double_up_pairs(men_list, players)[round_index]
-		pairs.append(tuple(double_up_pair))
-
-	return pairs
+	schedule = _odd_schedule(tuple(men_list))
+	cycle = schedule[(counter // size) % size]
+	return cycle[counter % size]
 
 
 def print_rotation(men, counter):
 	pairs = rotated_pairs(men, counter)
-	total = len(men) if len(men) % 2 == 0 else len(men) + 1
-	cycle_len = max(1, total - 1)
-	effective = counter % cycle_len
+	size = len(men)
 	print(f"requested counter = {counter}")
-	print(f"effective rotation (mod {cycle_len}) = {effective}")
-	for idx, (a, b) in enumerate(pairs, start=1):
+	if size % 2 == 0:
+		cycle_len = max(1, size - 1)
+		print(f"effective rotation (mod {cycle_len}) = {counter % cycle_len}")
+	else:
+		print(
+			f"cycle {(counter // size) % size + 1} of {size}, "
+			f"week {counter % size + 1} of {size}"
+		)
+	for a, b in pairs:
 		print(f"{a} + {b}")
 
 
