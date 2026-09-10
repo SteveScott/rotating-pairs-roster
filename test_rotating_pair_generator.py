@@ -83,7 +83,7 @@ class RotatedPairsTests(unittest.TestCase):
 
     def test_odd_cycle_modulo_behavior(self):
         men = ["A", "B", "C", "D", "E"]
-        # For odd n, cycle length is n (because of one bye per round).
+        # For odd n, cycle length is n (because of one double-up per round).
         self.assertEqual(
             pair_generator.rotated_pairs(men, 5),
             pair_generator.rotated_pairs(men, 0),
@@ -170,6 +170,84 @@ class RotatedPairsTests(unittest.TestCase):
 
         for week, pairs in enumerate(weeks):
             self.assertFalse(pairs & weeks[week - 1])
+
+
+class OddRosterDoubleUpTests(unittest.TestCase):
+    """Pin down the odd-roster rule: nobody sits out, so one man doubles up.
+
+    A pair needs two men, so an odd roster cannot leave one man over — a group
+    of one is not a pair. Rather than giving that man a bye, the generator pairs
+    him a second time with another man from the same week. A name appearing
+    twice in a week's output is therefore intended behaviour, not a bug.
+
+    Real roster names are confidential and must never appear in this repository,
+    so these tests use placeholder names.
+    """
+
+    ODD_ROSTER = [f"Person {number}" for number in range(1, 10)]
+
+    def test_odd_roster_produces_one_pair_more_than_halving_the_roster(self):
+        # 9 men => 5 pairs, not 4 pairs plus a leftover man.
+        for counter in range(len(self.ODD_ROSTER)):
+            pairs = pair_generator.rotated_pairs(self.ODD_ROSTER, counter)
+            self.assertEqual(len(pairs), (len(self.ODD_ROSTER) + 1) // 2)
+
+    def test_odd_roster_never_emits_a_lone_man_or_dummy_slot(self):
+        # The dummy slot used for the pairing math must never reach the output.
+        for counter in range(len(self.ODD_ROSTER)):
+            for pair in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
+                self.assertEqual(len(pair), 2)
+                self.assertNotIn(None, pair)
+                self.assertNotEqual(pair[0], pair[1])
+
+    def test_odd_roster_every_man_is_paired_every_week(self):
+        for counter in range(len(self.ODD_ROSTER)):
+            paired = set()
+            for a, b in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
+                paired.update((a, b))
+            self.assertEqual(paired, set(self.ODD_ROSTER))
+
+    def test_odd_roster_doubles_up_exactly_one_man_each_week(self):
+        for counter in range(len(self.ODD_ROSTER)):
+            counts = {man: 0 for man in self.ODD_ROSTER}
+            for a, b in pair_generator.rotated_pairs(self.ODD_ROSTER, counter):
+                counts[a] += 1
+                counts[b] += 1
+
+            doubled = [man for man, count in counts.items() if count == 2]
+            self.assertEqual(len(doubled), 1)
+            # Everyone else is in exactly one pair.
+            self.assertTrue(all(count in (1, 2) for count in counts.values()))
+
+    def test_odd_roster_doubled_man_gets_two_different_partners(self):
+        for counter in range(len(self.ODD_ROSTER)):
+            pairs = pair_generator.rotated_pairs(self.ODD_ROSTER, counter)
+            counts = {man: 0 for man in self.ODD_ROSTER}
+            for a, b in pairs:
+                counts[a] += 1
+                counts[b] += 1
+
+            doubled = next(man for man, count in counts.items() if count == 2)
+            partners = [
+                other
+                for pair in pairs
+                if doubled in pair
+                for other in pair
+                if other != doubled
+            ]
+            self.assertEqual(len(partners), 2)
+            self.assertEqual(len(set(partners)), 2)
+
+    def test_even_roster_never_doubles_anyone_up(self):
+        # The double-up is strictly an odd-roster mechanism.
+        men = ["A", "B", "C", "D", "E", "F"]
+        for counter in range(len(men) - 1):
+            counts = {man: 0 for man in men}
+            for a, b in pair_generator.rotated_pairs(men, counter):
+                counts[a] += 1
+                counts[b] += 1
+
+            self.assertTrue(all(count == 1 for count in counts.values()))
 
 
 if __name__ == '__main__':
